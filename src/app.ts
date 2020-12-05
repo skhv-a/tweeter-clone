@@ -91,6 +91,49 @@ app.post('/signin', (req, res) => {
   })();
 });
 
+app.get('/users', async (req, res) => {
+  try {
+    const usersResponse = await client.query('SELECT user_name, id FROM users');
+
+    const users = usersResponse.rows;
+
+    res.json(users);
+  } catch (error) {
+    res.status(400).json({message: 'Cannot get users'});
+  }
+});
+
+app.get('/users/:id', async (req, res) => {
+  try {
+    const {id} = req.params;
+
+    await client.query('BEGIN');
+    const userResponse: QueryResult<User> = await client.query(
+      'SELECT user_name FROM users WHERE id = $1',
+      [Number(id)]
+    );
+
+    if (!userResponse.rowCount) {
+      throw {message: 'user not found'};
+    }
+
+    const [user] = userResponse.rows;
+
+    const postsResponse: QueryResult<Post> = await client.query(
+      'SELECT * FROM posts WHERE created_by = $1',
+      [Number(id)]
+    );
+
+    const posts = postsResponse.rows;
+
+    await client.query('COMMIT');
+    res.json({...user, posts});
+  } catch (error) {
+    await client.query('ROLLBACK');
+    res.status(404).json({message: 'can not get user'});
+  }
+});
+
 app.post('/posts', async (req, res) => {
   try {
     const {created_by, content} = req.body as PostPostReq;
