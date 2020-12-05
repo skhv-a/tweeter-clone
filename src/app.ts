@@ -1,9 +1,10 @@
-import express, {json, query} from 'express';
+import express, {json} from 'express';
 import {compareSync, hashSync} from 'bcrypt';
 import {Client, QueryResult} from 'pg';
 import dotenv from 'dotenv';
 import {SignInReq, SignUpReq} from './models/auth.model';
 import {User} from './models/user.model';
+import {Post, PostPostReq, GetPostReq} from './models/post.model';
 
 dotenv.config();
 const client = new Client();
@@ -88,6 +89,43 @@ app.post('/signin', (req, res) => {
       res.status(401).json({message: 'Cannot signin'});
     }
   })();
+});
+
+app.post('/posts', async (req, res) => {
+  try {
+    const {created_by, content} = req.body as PostPostReq;
+
+    const postPostText =
+      'INSERT INTO posts(created_by, content, created_at) VALUES($1, $2, $3) RETURNING *';
+    const postPostValues = [Number(created_by), content, new Date()];
+    const response: QueryResult<Post> = await client.query(
+      postPostText,
+      postPostValues
+    );
+
+    const [post] = response.rows;
+
+    res.json(post);
+  } catch (error) {
+    res.status(400).json({message: 'Can not create post'});
+  }
+});
+
+app.get('/posts', async (req, res) => {
+  try {
+    const {user_id} = req.body as GetPostReq;
+
+    const response = await client.query(
+      'SELECT * FROM posts WHERE created_by = $1',
+      [user_id]
+    );
+
+    const posts = response.rows;
+
+    res.json(posts);
+  } catch (error) {
+    res.status(400).json({message: 'cannot get posts'});
+  }
 });
 
 app.listen(port, () => {
