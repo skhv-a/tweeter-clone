@@ -4,7 +4,8 @@ import {Client, QueryResult} from 'pg';
 import dotenv from 'dotenv';
 import {SignInReq, SignUpReq} from './models/auth.model';
 import {User} from './models/user.model';
-import {Post, PostPostReq, GetPostReq} from './models/post.model';
+import {Post, PostPostReq, LikePostReq} from './models/post.model';
+import {getUsersFromLikes} from './utils/getUsersFromIds';
 
 dotenv.config();
 const client = new Client();
@@ -134,13 +135,14 @@ app.get('/users/:id', async (req, res) => {
   }
 });
 
-app.post('/posts', async (req, res) => {
+app.post('/users/:id/posts/', async (req, res) => {
   try {
-    const {created_by, content} = req.body as PostPostReq;
+    const {id} = req.params;
+    const {content} = req.body as PostPostReq;
 
     const postPostText =
       'INSERT INTO posts(created_by, content, created_at) VALUES($1, $2, $3) RETURNING *';
-    const postPostValues = [Number(created_by), content, new Date()];
+    const postPostValues = [Number(id), content, new Date()];
     const response: QueryResult<Post> = await client.query(
       postPostText,
       postPostValues
@@ -154,20 +156,67 @@ app.post('/posts', async (req, res) => {
   }
 });
 
-app.get('/posts', async (req, res) => {
+app.get('/users/:id/posts/', async (req, res) => {
   try {
-    const {user_id} = req.body as GetPostReq;
+    const {id} = req.params;
 
-    const response = await client.query(
+    const response: QueryResult<Post> = await client.query(
       'SELECT * FROM posts WHERE created_by = $1',
-      [user_id]
+      [Number(id)]
     );
 
-    const posts = response.rows;
+    const posts = await Promise.all(
+      response.rows.map(async post => {
+        const usersFromLikes = await getUsersFromLikes(client, post.likes);
+
+        return Object.assign(post, {likes: usersFromLikes});
+      })
+    );
 
     res.json(posts);
   } catch (error) {
     res.status(400).json({message: 'cannot get posts'});
+  }
+});
+
+app.post('/posts/:id/like', async (req, res) => {
+  try {
+    const {id} = req.params;
+    const {user_id, action} = req.body as LikePostReq;
+
+    const currentUserResponse: QueryResult<User> = await client.query(
+      'SELECT id FROM users WHERE id = $1',
+      [user_id]
+    );
+
+    if (!currentUserResponse.rowCount) {
+      throw {message: 'User doesnt exist'};
+    }
+
+    const currentLikesResponse: QueryResult<Post> = await client.query(
+      'SELECT likes FROM posts WHERE id = $1',
+      [Number(id)]
+    );
+
+    const {likes} = currentLikesResponse.rows[0];
+
+    const updatedLikes =
+      action === 'like'
+        ? [...likes, Number(user_id)]
+        : action === 'unlike'
+        ? likes.filter(id => id !== Number(user_id))
+        : likes;
+
+    await client.query('UPDATE posts SET likes = $1 WHERE id = $2', [
+      updatedLikes,
+      id,
+    ]);
+
+    const usersFromLikes = await getUsersFromLikes(client, updatedLikes);
+
+    res.json(usersFromLikes);
+  } catch (error) {
+    res.status(400).json({message: 'can not like post'});
   }
 });
 
