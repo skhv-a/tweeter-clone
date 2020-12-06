@@ -3,9 +3,9 @@ import {compareSync, hashSync} from 'bcrypt';
 import {Client, QueryResult} from 'pg';
 import dotenv from 'dotenv';
 import {SignInReq, SignUpReq} from './models/auth.model';
-import {User} from './models/user.model';
+import {SubscribeToUserReq, User} from './models/user.model';
 import {Post, PostPostReq, LikePostReq} from './models/post.model';
-import {getUsersFromLikes} from './utils/getUsersFromIds';
+import {getUsersFromIds} from './utils/getUsersFromIds';
 
 dotenv.config();
 const client = new Client();
@@ -110,7 +110,7 @@ app.get('/users/:id', async (req, res) => {
 
     await client.query('BEGIN');
     const userResponse: QueryResult<User> = await client.query(
-      'SELECT user_name FROM users WHERE id = $1',
+      'SELECT id, user_name, follows, followers FROM users WHERE id = $1',
       [Number(id)]
     );
 
@@ -125,13 +125,86 @@ app.get('/users/:id', async (req, res) => {
       [Number(id)]
     );
 
-    const posts = postsResponse.rows;
+    const posts = await Promise.all(
+      postsResponse.rows.map(async post => {
+        const [fullCreatedBy] = await getUsersFromIds(client, [
+          post.created_by,
+        ]);
+
+        const fullLikes = await getUsersFromIds(client, post.likes);
+
+        return Object.assign(post, {
+          created_by: fullCreatedBy,
+          likes: fullLikes,
+        });
+      })
+    );
+
+    const follows = await getUsersFromIds(client, user.follows);
+    const followers = await getUsersFromIds(client, user.followers);
 
     await client.query('COMMIT');
-    res.json({...user, posts});
+    res.json({...user, posts, follows, followers});
   } catch (error) {
     await client.query('ROLLBACK');
     res.status(404).json({message: 'can not get user'});
+  }
+});
+
+app.post('/users/:id', async (req, res) => {
+  try {
+    const {follower_id, action} = req.body as SubscribeToUserReq;
+    const {id} = req.params;
+
+    await client.query('BEGIN');
+
+    const followsResponse: QueryResult<
+      Pick<User, 'follows'>
+    > = await client.query('SELECT follows FROM users WHERE id = $1', [
+      follower_id,
+    ]);
+
+    const {follows} = followsResponse.rows[0];
+
+    const updatedFollows =
+      action === 'subscribe'
+        ? follows.concat(Number(id))
+        : action === 'unsubscribe'
+        ? follows.filter(f => f !== Number(id))
+        : follows;
+
+    await client.query('UPDATE users SET follows = $1 WHERE id = $2', [
+      updatedFollows,
+      follower_id,
+    ]);
+
+    const followersResponse: QueryResult<
+      Pick<User, 'followers'>
+    > = await client.query('SELECT followers FROM users WHERE id = $1', [
+      Number(id),
+    ]);
+
+    const {followers} = followersResponse.rows[0];
+
+    const updatedFollowers =
+      action === 'subscribe'
+        ? followers.concat(follower_id)
+        : action === 'unsubscribe'
+        ? followers.filter(f => f !== Number(follower_id))
+        : followers;
+
+    await client.query('UPDATE users SET followers = $1 WHERE id = $2', [
+      updatedFollowers,
+      Number(id),
+    ]);
+
+    const usersFromFollows = await getUsersFromIds(client, updatedFollows);
+
+    await client.query('COMMIT');
+    res.json(usersFromFollows);
+  } catch (error) {
+    await client.query('ROLLBACK');
+    res.status(400).json({message: 'can not subscribe'});
   }
 });
 
@@ -167,7 +240,7 @@ app.get('/users/:id/posts/', async (req, res) => {
 
     const posts = await Promise.all(
       response.rows.map(async post => {
-        const usersFromLikes = await getUsersFromLikes(client, post.likes);
+        const usersFromLikes = await getUsersFromIds(client, post.likes);
 
         return Object.assign(post, {likes: usersFromLikes});
       })
@@ -212,7 +285,7 @@ app.post('/posts/:id/like', async (req, res) => {
       id,
     ]);
 
-    const usersFromLikes = await getUsersFromLikes(client, updatedLikes);
+    const usersFromLikes = await getUsersFromIds(client, updatedLikes);
 
     res.json(usersFromLikes);
   } catch (error) {
