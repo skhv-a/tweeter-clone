@@ -7,11 +7,9 @@
     "dev": "nodemon --config nodemon.json src/app.ts",
     "lint": "gts lint",
     "clean": "gts clean",
-    "compile": "tsc",
-    "fix": "gts fix",
-    "prepare": "yarn run compile",
-    "pretest": "yarn run compile",
-    "posttest": "yarn run lint"
+    "build": "tsc",
+    "fix": "gts fix"
+
   },
   "repository": {
     "type": "git",
