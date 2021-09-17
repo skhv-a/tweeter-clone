@@ -1,3 +1,3 @@
-# tweeter-clone
+# Express playground
 
 My first api
